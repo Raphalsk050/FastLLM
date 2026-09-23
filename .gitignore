@@ -1,0 +1,6 @@
+# Local cluster state: IPs, users, API key and model paths
+cluster.json
+models.ini
+generated/
+
+__pycache__/
