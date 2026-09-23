@@ -26,7 +26,8 @@ NVIDIA GPUs need the driver installed (`nvidia-smi` working); the CUDA Toolkit i
 - The prebuilt llama.cpp CUDA package needs glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40 or newer). On older systems, such as Ubuntu 22.04, the tool switches NVIDIA GPUs to the Vulkan package, which runs on glibc 2.35+. The setup script installs the Vulkan loader (`libvulkan1`).
 - RHEL/Rocky/Alma 9 (glibc 2.34) cannot run the prebuilt packages; build llama.cpp from source there.
 - Workers must not suspend. On GNOME: Settings → Power → Automatic Suspend off. On dedicated machines: `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
-- Behind a proxy, run `export HTTPS_PROXY=http://proxy:port` before `install`.
+- Behind a proxy, run `export HTTPS_PROXY=http://proxy:port` before `install` and `pull`.
+- Gated models on Hugging Face (Llama and others) need `export HF_TOKEN=...` before `pull`.
 
 ### Tested combinations
 
@@ -35,34 +36,41 @@ NVIDIA GPUs need the driver installed (`nvidia-smi` working); the CUDA Toolkit i
 | Windows 11 | Windows 11 (RTX 2060), Linux x64 (GTX 1050 Ti), macOS on Apple Silicon (M3) |
 | Linux (Ubuntu 24.04) | Linux x64 (GTX 1050 Ti) |
 
-## Quick start
+## Quick start (Linux main host)
 
-1. On the main host:
+1. Clone the repo on the main host and run the setup script:
    ```
-   python cluster.py init
+   git clone https://github.com/Raphalsk050/FastLLM.git
+   cd FastLLM
+   ./setup-main.sh
    ```
-   This creates `cluster.json`, `models.ini`, an SSH key used only by the cluster, and the worker setup scripts in `generated/`.
-2. Copy the matching script from `generated/` to each worker and run it as administrator:
-   - Windows: `powershell -ExecutionPolicy Bypass -File worker-setup-windows.ps1`
-   - Linux/macOS: `sudo sh worker-setup-unix.sh`
+   It checks the required tools, creates `cluster.json`, `models.ini` and an SSH key used only by the cluster, and installs llama.cpp on this machine. If the detected IP is wrong (VPN, several networks), run `./setup-main.sh --main-ip IP`.
+2. Register the workers, in one of two ways:
+   - **At each worker:** run `python3 cluster.py enroll` on the main host. It prints one command; paste it into a terminal on each worker. The command downloads the setup script from the main host, checks its sha256, runs it with `sudo` and registers the worker. Press Ctrl+C on the main host once every worker shows up.
+   - **From the main host:** if the workers already accept SSH with a password, run `python3 cluster.py bootstrap user@10.0.0.11 user@10.0.0.12 ...` and type each password when asked.
 
-   Each one ends by printing a `python cluster.py add ...` line.
-3. On the main host, run every `add` line that was printed.
-4. Install the same llama.cpp build everywhere:
+   Windows workers: run `generated/worker-setup-windows.ps1` as administrator (`powershell -ExecutionPolicy Bypass -File worker-setup-windows.ps1`), then the `add` line it prints.
+3. Install llama.cpp on the workers and start them:
    ```
-   python cluster.py install
+   python3 cluster.py install
+   python3 cluster.py start
    ```
-5. Describe your models in `models.ini` (see below).
-6. Start the workers and the server:
+   `start` prints each worker's free GPU memory. Add it up to pick a model: the file size plus ~15% for the context has to fit.
+4. Download a model and create its profile:
    ```
-   python cluster.py start
-   python cluster.py serve my-profile --detach --public
+   python3 cluster.py pull Qwen/Qwen3-32B-GGUF Qwen3-32B-Q4_K_M.gguf --profile qwen32b
+   ```
+5. Serve it:
+   ```
+   python3 cluster.py serve qwen32b --detach --public
    ```
    The command prints the URL, the API key and the model name.
-7. When you are done:
+6. When you are done:
    ```
-   python cluster.py stop
+   python3 cluster.py stop
    ```
+
+On a Windows main host, use `python` instead of `python3`, and run `python cluster.py init` followed by `python cluster.py install` instead of `setup-main.sh`.
 
 ## Model profiles (`models.ini`)
 
@@ -129,12 +137,15 @@ For other machines to connect, the port must be open in the main host's firewall
 | Command | What it does |
 |---|---|
 | `init [--key FILE] [--main-ip IP]` | Creates the config, profiles, SSH key and worker scripts |
-| `add IP USER [--name N] [--backend cuda\|vulkan\|cpu\|metal]` | Registers a worker and detects its OS and GPU |
+| `enroll [--port P]` | Serves the Unix setup script and prints the one-line command that prepares and registers each worker |
+| `bootstrap USER@IP...` | Prepares and registers Linux/macOS workers that already accept SSH with a password |
+| `add IP USER [--name N] [--backend cuda\|vulkan\|cpu\|metal]` | Registers a worker that is already prepared, detecting its OS and GPU |
 | `remove NAME` | Removes a worker |
 | `status` | Shows the server and, per worker, install state, RPC server and tunnel |
 | `install [--force]` | Downloads llama.cpp (sha256 checked) and installs it here and on the workers |
 | `start` | Starts the RPC servers and tunnels, and prints each worker's free memory |
 | `models` | Lists the profiles in `models.ini` |
+| `pull REPO FILE [--profile N] [--dir D] [--context C]` | Downloads a GGUF from Hugging Face (resumable, sha256 checked, split files included) and creates its profile |
 | `bench PROFILE\|FILE [--quick] [--local]` | Measures speed; `--local` uses only the main host, for comparison |
 | `serve PROFILE\|FILE [--detach] [--public] [--port P] [--api-key K] [--local]` | Serves the API with every GPU |
 | `endpoint` | Prints the URL, key and model of the running server |
@@ -191,6 +202,7 @@ Generation got 2.5x faster, while prompt processing got slower: activations cros
 ## Files
 
 - `cluster.py`: the tool (runs on the main host).
+- `setup-main.sh`: first-time setup of a Linux or macOS main host.
 - `worker-setup-windows.ps1`, `worker-setup-unix.sh`: templates for the worker setup scripts; `init` writes filled-in copies to `generated/`.
 - `~/.llama-cluster/` on the main host: downloads, binaries, logs (tunnels and `server.log`) and state.
 - `~/llama-cluster/` on the workers: binaries.
