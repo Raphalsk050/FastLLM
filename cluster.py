@@ -1003,15 +1003,20 @@ def port_free(port):
 
 def cmd_start(args):
     cfg = load_config()
-    if not cfg["workers"]:
-        die(f"nenhum trabalhador. Use: {CMD} add <ip> <usuario>")
+    skip = {s.strip() for s in (args.skip or "").split(",") if s.strip()}
+    unknown = skip - {w["name"] for w in cfg["workers"]}
+    if unknown:
+        die(f"--skip: trabalhador desconhecido: {', '.join(sorted(unknown))}")
+    workers = [w for w in cfg["workers"] if w["name"] not in skip]
+    if not workers:
+        die(f"nenhum trabalhador para ligar. Use: {CMD} add <ip> <usuario>")
     main = local_machine(cfg)
     local_exe(cfg, main, "llama-cli")
     stop_all(cfg, quiet=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     state = {"tunnels": []}
     port = cfg["base_port"]
-    for w in cfg["workers"]:
+    for w in workers:
         while not port_free(port):  # something else already listens there; a probe would reach it
             port += 1
         cmd = ["ssh", *ssh_opts(cfg), "-o", "ExitOnForwardFailure=yes",
@@ -1282,7 +1287,9 @@ def main():
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_install)
 
-    sub.add_parser("start", help="liga os servidores RPC e os tuneis").set_defaults(fn=cmd_start)
+    p = sub.add_parser("start", help="liga os servidores RPC e os tuneis")
+    p.add_argument("--skip", help="trabalhadores para deixar de fora, separados por virgula (ex.: mac,pc2)")
+    p.set_defaults(fn=cmd_start)
     sub.add_parser("models", help=f"lista os perfis de {MODELS_PATH.name}").set_defaults(fn=cmd_models)
 
     p = sub.add_parser("pull", help="baixa um GGUF do Hugging Face e cria o perfil")

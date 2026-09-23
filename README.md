@@ -143,7 +143,7 @@ For other machines to connect, the port must be open in the main host's firewall
 | `remove NAME` | Removes a worker |
 | `status` | Shows the server and, per worker, install state, RPC server and tunnel |
 | `install [--force]` | Downloads llama.cpp (sha256 checked) and installs it here and on the workers |
-| `start` | Starts the RPC servers and tunnels, and prints each worker's free memory |
+| `start [--skip N1,N2]` | Starts the RPC servers and tunnels, and prints each worker's free memory; `--skip` leaves workers out without removing them |
 | `models` | Lists the profiles in `models.ini` |
 | `pull REPO FILE [--profile N] [--dir D] [--context C]` | Downloads a GGUF from Hugging Face (resumable, sha256 checked, split files included) and creates its profile |
 | `bench PROFILE\|FILE [--quick] [--local]` | Measures speed; `--local` uses only the main host, for comparison |
