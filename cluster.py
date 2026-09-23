@@ -41,6 +41,7 @@ DOWNLOADS = RUNTIME / "downloads"
 LOGS = RUNTIME / "logs"
 STATE_PATH = RUNTIME / "state.json"
 SCRIPT = Path(__file__).name
+CMD = ("python " if os.name == "nt" else "python3 ") + SCRIPT  # how to run this tool, for the hints we print
 
 DEFAULTS = {
     "build": "b11115",
@@ -210,7 +211,7 @@ def die(msg):
 
 def load_config():
     if not CONFIG_PATH.exists():
-        die(f"{CONFIG_PATH.name} nao existe. Rode primeiro: python {SCRIPT} init")
+        die(f"{CONFIG_PATH.name} nao existe. Rode primeiro: {CMD} init")
     cfg = dict(DEFAULTS)
     cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     return cfg
@@ -352,7 +353,7 @@ def detect(cfg, w):
                        encoding="utf-8", errors="replace", timeout=60)
     if r.returncode == 255:
         die(f"sem acesso SSH a {dest(w)}: {r.stderr.strip()}\n"
-            f"Rode o script de preparacao nessa maquina (python {SCRIPT} init gera os scripts).")
+            f"Rode o script de preparacao nessa maquina ({CMD} init gera os scripts).")
     posix = r.returncode == 0 and r.stdout.strip() in ("Linux", "Darwin")
     probe = dict(w, os="linux" if posix else "windows")
     rc, out, err = run_remote(cfg, probe, POSIX_DETECT if posix else WINDOWS_DETECT, timeout=120)
@@ -392,7 +393,7 @@ def local_dir(cfg, m):
 def local_exe(cfg, m, tool):
     p = local_dir(cfg, m) / (tool + (".exe" if m["os"] == "windows" else ""))
     if not p.exists():
-        die(f"{p} nao existe. Rode: python {SCRIPT} install")
+        die(f"{p} nao existe. Rode: {CMD} install")
     return str(p)
 
 
@@ -418,7 +419,7 @@ def as_bool(key, value):
 
 def load_profiles():
     if not MODELS_PATH.exists():
-        die(f"{MODELS_PATH.name} nao existe. Rode: python {SCRIPT} init")
+        die(f"{MODELS_PATH.name} nao existe. Rode: {CMD} init")
     parser = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
     parser.read(MODELS_PATH, encoding="utf-8")
     return {name: dict(parser[name]) for name in parser.sections()}
@@ -638,10 +639,10 @@ def cmd_init(args):
     print(f"perfis de modelo: {MODELS_PATH}")
     print(f"IP deste PC (principal): {cfg['main_ip']}  (mude com --main-ip se estiver errado)")
     print(f"scripts para os trabalhadores: {GENERATED}")
-    print("\nEm cada trabalhador, como administrador:")
-    print("  Windows: powershell -ExecutionPolicy Bypass -File worker-setup-windows.ps1")
-    print("  Linux/macOS: sudo sh worker-setup-unix.sh")
-    print(f"Cada um imprime a linha 'python {SCRIPT} add ...' para rodar aqui.")
+    print("\nPara registrar os trabalhadores:")
+    print(f"  Linux/macOS: {CMD} enroll  (mostra um comando para colar em cada um)")
+    print(f"               {CMD} bootstrap usuario@ip ...  (se ja aceitam SSH com senha)")
+    print("  Windows: rode generated/worker-setup-windows.ps1 como administrador e depois a linha 'add' que ele imprime")
 
 
 def register_worker(host, user, name=None, backend=None, replace_host=False):
@@ -673,7 +674,7 @@ def register_worker(host, user, name=None, backend=None, replace_host=False):
         print(note)
     if w["backend"] == "cpu":
         print("aviso: sem GPU compativel; um trabalhador so com CPU costuma deixar o conjunto mais lento. "
-              f"Para tirar: python {SCRIPT} remove {name}")
+              f"Para tirar: {CMD} remove {name}")
     return w
 
 
@@ -686,7 +687,7 @@ def cmd_bootstrap(args):
     cfg = load_config()
     script = GENERATED / "worker-setup-unix.sh"
     if not script.exists():
-        die(f"{script} nao existe. Rode: python {SCRIPT} init")
+        die(f"{script} nao existe. Rode: {CMD} init")
     RUNTIME.mkdir(parents=True, exist_ok=True)
     remote = "/tmp/fastllm-worker.sh"
     for target in args.targets:
@@ -724,7 +725,7 @@ def cmd_enroll(args):
     cfg = load_config()
     script = GENERATED / "worker-setup-unix.sh"
     if not script.exists():
-        die(f"{script} nao existe. Rode: python {SCRIPT} init")
+        die(f"{script} nao existe. Rode: {CMD} init")
     body = script.read_bytes()
     digest = hashlib.sha256(body).hexdigest()
     token = secrets.token_urlsafe(12)
@@ -780,7 +781,7 @@ def cmd_enroll(args):
     else:
         print(f"(com ufw ativo neste PC: sudo ufw allow {args.port}/tcp enquanto registra; "
               f"depois sudo ufw delete allow {args.port}/tcp)")
-    print(f"Os registros aparecem aqui. Ctrl+C quando terminar; depois: python {SCRIPT} install && python {SCRIPT} start")
+    print(f"Os registros aparecem aqui. Ctrl+C quando terminar; depois: {CMD} install && {CMD} start")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -821,7 +822,7 @@ def cmd_status(args):
     srv = server_state()
     if srv:
         where = "rede" if srv["public"] else "so este PC"
-        print(f"servidor: ligado, modelo {srv['alias']}, porta {srv['port']} ({where}). Detalhes: python {SCRIPT} endpoint")
+        print(f"servidor: ligado, modelo {srv['alias']}, porta {srv['port']} ({where}). Detalhes: {CMD} endpoint")
     else:
         print("servidor: desligado")
     for w in cfg["workers"]:
@@ -1003,7 +1004,7 @@ def port_free(port):
 def cmd_start(args):
     cfg = load_config()
     if not cfg["workers"]:
-        die(f"nenhum trabalhador. Use: python {SCRIPT} add <ip> <usuario>")
+        die(f"nenhum trabalhador. Use: {CMD} add <ip> <usuario>")
     main = local_machine(cfg)
     local_exe(cfg, main, "llama-cli")
     stop_all(cfg, quiet=True)
@@ -1049,7 +1050,7 @@ def running_tunnels(cfg):
     state = load_state()
     tunnels = [t for t in state.get("tunnels", []) if pid_alive(t["pid"])]
     if not tunnels:
-        die(f"nenhum servidor RPC ligado. Rode: python {SCRIPT} start")
+        die(f"nenhum servidor RPC ligado. Rode: {CMD} start")
     return tunnels
 
 
@@ -1077,7 +1078,7 @@ def cmd_pull(args):
         with open(MODELS_PATH, "a", encoding="utf-8") as fp:
             fp.write(f"\n[{name}]\nmodel = {first.as_posix()}\ncontext_length = {args.context}\n")
         print(f"perfil '{name}' criado em {MODELS_PATH.name}")
-    print(f"Proximo: python {SCRIPT} serve {name} --detach --public")
+    print(f"Proximo: {CMD} serve {name} --detach --public")
 
 
 def cmd_models(args):
@@ -1201,14 +1202,14 @@ def cmd_serve(args):
         stop_server()
         die(f"o servidor nao ficou pronto. Final do log:\n{tail}")
     print_endpoint(cfg, srv)
-    print(f"\nRodando em segundo plano. Para desligar: python {SCRIPT} stop")
+    print(f"\nRodando em segundo plano. Para desligar: {CMD} stop")
 
 
 def cmd_endpoint(args):
     cfg = load_config()
     srv = server_state()
     if not srv:
-        die(f"nenhum servidor em segundo plano. Rode: python {SCRIPT} serve <perfil> --detach")
+        die(f"nenhum servidor em segundo plano. Rode: {CMD} serve <perfil> --detach")
     print_endpoint(cfg, srv)
 
 

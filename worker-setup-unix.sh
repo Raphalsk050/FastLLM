@@ -88,5 +88,5 @@ if [ -n "$ENROLL_URL" ]; then
     echo "Registro no PC principal: $R"
 else
     echo "Pronto. No PC principal, rode:"
-    echo "  python cluster.py add $IP $TARGET_USER --name $NAME"
+    echo "  python3 cluster.py add $IP $TARGET_USER --name $NAME"
 fi
