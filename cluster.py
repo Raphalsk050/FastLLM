@@ -681,6 +681,39 @@ def cmd_add(args):
     register_worker(args.host, args.user, args.name, args.backend)
 
 
+def cmd_bootstrap(args):
+    """Prepare Linux/macOS workers that already accept SSH with a password, straight from the main host."""
+    cfg = load_config()
+    script = GENERATED / "worker-setup-unix.sh"
+    if not script.exists():
+        die(f"{script} nao existe. Rode: python {SCRIPT} init")
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    remote = "/tmp/fastllm-worker.sh"
+    for target in args.targets:
+        user, _, host = target.rpartition("@")
+        if not (user and HOST_RE.match(host) and USER_RE.match(user)):
+            print(f"{target}: use usuario@ip")
+            continue
+        print(f"\n=== {target} (digite a senha desse usuario quando pedir) ===")
+        opts = ["-o", "StrictHostKeyChecking=accept-new"]
+        if os.name != "nt":  # one shared connection, so the password is typed once per machine
+            opts += ["-o", "ControlMaster=auto", "-o", f"ControlPath={RUNTIME}/ssh-%C", "-o", "ControlPersist=60"]
+        if subprocess.run(["scp", "-q", *opts, str(script), f"{target}:{remote}"]).returncode != 0:
+            print(f"{target}: nao consegui copiar o script (o SSH com senha esta ligado nessa maquina?)")
+            continue
+        run = f"sudo sh {remote}; s=$?; rm -f {remote}; exit $s"
+        if subprocess.run(["ssh", "-t", *opts, target, run]).returncode != 0:
+            print(f"{target}: a preparacao falhou")
+            continue
+        r = subprocess.run(["ssh", *ssh_opts(cfg), target, "hostname -s || hostname"],
+                           capture_output=True, text=True, timeout=60)
+        name = r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else host
+        try:
+            register_worker(host, user, name if NAME_RE.match(name) else host, replace_host=True)
+        except SystemExit:
+            print(f"{target}: preparado, mas o registro falhou")
+
+
 HOST_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
 USER_RE = re.compile(r"^[A-Za-z0-9._@\\-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -1233,6 +1266,10 @@ def main():
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--bind", default="0.0.0.0", help="endereco onde escutar (padrao: todas as interfaces)")
     p.set_defaults(fn=cmd_enroll)
+
+    p = sub.add_parser("bootstrap", help="prepara e registra trabalhadores Linux/macOS que ja aceitam SSH com senha")
+    p.add_argument("targets", nargs="+", metavar="usuario@ip")
+    p.set_defaults(fn=cmd_bootstrap)
 
     p = sub.add_parser("remove", help="tira um trabalhador da lista")
     p.add_argument("name")
