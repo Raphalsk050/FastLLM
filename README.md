@@ -177,32 +177,89 @@ Arguments after `--` go straight to llama.cpp, e.g. `python cluster.py serve qwe
 
 ## What to expect
 
-- **More machines means more memory, not more speed.** With the model split by layers, generation time is roughly the sum of every machine's share. It only pays off when the model would not fit on fewer GPUs.
-- **Leave slow machines out when you can.** Qwen3-14B ran at 26 tokens/s on two PCs and at 7 tokens/s after adding a GTX 1050 Ti and a MacBook Air on Wi-Fi.
-- **First load:** the main host sends the weights to every worker (~90 MB/s on 1 Gbps, so 100 GB takes ~20 minutes). Later loads use each worker's cache (a 9 GB load went from ~60 s to ~15 s).
+- **More machines means more memory, not more speed.** With the model split by layers, generation time is roughly the sum of every machine's share. It pays off when the model would not fit on fewer GPUs: Qwen3-32B went from 1.9 tokens/s on one PC to 4.7 tokens/s on four machines.
+- **Leave slow machines out when you can.** Qwen3-14B ran at 26.7 tokens/s on two PCs and at 7.1 tokens/s after adding a GTX 1050 Ti and a MacBook Air on Wi-Fi.
+- **Prompts suffer first.** Reading a prompt is compute-bound, so slow GPUs and Wi-Fi hurt it more than generation; the server's prompt cache makes repeated prefixes almost free.
+- **First load:** the main host sends the weights to every worker (~90 MB/s on 1 Gbps, so 100 GB takes ~20 minutes). Later loads use each worker's cache (Qwen3-32B went from ~380 s to 50 s).
 - **Full GPU:** on Windows, when a GPU fills up the system moves part of the model to RAM and generation drops below 1 token/s (`nvidia-smi dmon` shows ~10 GB/s of PCIe traffic). Raise the margins in `cluster.json` or lower `context_length`.
 
-Measured with Qwen3-14B Q4_K_M (9 GB) on 1 Gbps Ethernet:
+See [Benchmarks](#benchmarks) for every measurement.
 
-| Setup | Generation |
+## Benchmarks
+
+Measured on a small home cluster with llama.cpp b11115. The machine with the RTX 3070 is the main host in every cluster run and also the single-PC baseline.
+
+| Role | CPU | RAM | GPU | GPU memory | Link to the main host |
+|---|---|---|---|---|---|
+| Main host / single PC | AMD Ryzen 9 5950X | 64 GB | NVIDIA RTX 3070 | 8 GB | — |
+| Worker | AMD Ryzen 5 5600X | 12 GB | NVIDIA RTX 2060 | 6 GB | 1 Gbps Ethernet |
+| Worker | Intel Pentium G4560 | 8 GB | NVIDIA GTX 1050 Ti | 4 GB | 1 Gbps Ethernet |
+| Worker | Apple M3 (MacBook Air) | 24 GB unified | Apple M3 GPU | up to 17.8 GB | Wi-Fi |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/generation-speed-dark.svg">
+  <img alt="Generation speed in tokens per second for Qwen3-14B, Qwen3-32B and Qwen3.8-Flash-Next, single PC versus cluster" src="docs/charts/generation-speed-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/prompt-speed-dark.svg">
+  <img alt="Prompt processing speed in tokens per second, single PC versus cluster" src="docs/charts/prompt-speed-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/load-time-dark.svg">
+  <img alt="Seconds until the server is ready, first load versus reload with the worker cache" src="docs/charts/load-time-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/hardware-memory-dark.svg">
+  <img alt="GPU memory and system RAM of each machine" src="docs/charts/hardware-memory-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/hardware-bandwidth-dark.svg">
+  <img alt="GPU memory bandwidth of each GPU in GB/s" src="docs/charts/hardware-bandwidth-light.svg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/charts/network-latency-dark.svg">
+  <img alt="Median ping from each worker to the main host" src="docs/charts/network-latency-light.svg">
+</picture>
+
+### All measurements
+
+| Model | Setup | Where the weights lived | Prompt (tok/s) | Generation (tok/s) | Source |
+|---|---|---|---|---|---|
+| Qwen3-14B Q4_K_M (9.0 GB) | Single PC: RTX 3070 + 64 GB RAM | partly in RAM | 640 | 7.9 | llama-bench |
+| Qwen3-14B Q4_K_M | Cluster: RTX 3070 + RTX 2060 | GPU | 672 | 26.7 | llama-bench |
+| Qwen3-14B Q4_K_M | Cluster: RTX 3070 + RTX 2060, 8k context | GPU | — | 20.5 | server |
+| Qwen3-14B Q4_K_M | Cluster: RTX 3070 + RTX 2060, 8k context, 1 GB VRAM margin | VRAM spilled to RAM | — | 0.5 | server |
+| Qwen3-14B Q4_K_M | Cluster: RTX 3070 + GTX 1050 Ti | partly in RAM | 219 | 10.5 | llama-bench |
+| Qwen3-14B Q4_K_M | Cluster: RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | GPU | 100 | 7.1 | llama-bench |
+| Qwen3-32B Q4_K_M (19.8 GB) | Single PC: RTX 3070 + 64 GB RAM | partly in RAM | 210 | 1.9 | llama-bench |
+| Qwen3-32B Q4_K_M | Cluster: RTX 3070 + RTX 2060 + GTX 1050 Ti | partly in RAM | 112 ¹ | 2.2 | server |
+| Qwen3-32B Q4_K_M | Cluster: RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | GPU | 53 | 4.7 | llama-bench |
+| Qwen3-32B Q4_K_M | Cluster: same four machines | GPU | 48 ¹ | 4.9 | server |
+| Qwen3.8-Flash-Next UD-Q2_K_XL (78.9 GB, MoE, 6B active) | Cluster: RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | partly in RAM (~42 GB) | 0.5 cold, 10.9 warm ² | 3.5 | server |
+
+¹ 2,500-token prompt. ² short prompt. llama-bench used pp512 for prompts and tg128 or tg32 for generation. Server runs used 16k context unless the setup says otherwise; the server returned a repeated system prompt from its cache in 0.6-0.9 s.
+
+| Load and network | Result |
 |---|---|
-| RTX 3070 8 GB alone (rest in RAM) | 7.9 tokens/s |
-| RTX 3070 + RTX 2060 6 GB, context 640 | 26.7 tokens/s |
-| RTX 3070 + RTX 2060 6 GB, context 8192 (server) | 20.5 tokens/s |
+| Qwen3-14B, RTX 3070 + RTX 2060: first load / reload with the worker cache | ~80 s / 14 s |
+| Qwen3-32B, four machines: first load / reload with the worker cache | ~380 s / 50 s (0.3 GB sent) |
+| Qwen3.8-Flash-Next, four machines: first load | 440 s |
+| Median ping to the wired workers | 0.29-0.32 ms |
+| Median ping to the MacBook on Wi-Fi | 3.98 ms |
+| File copy to a wired worker over SSH | 90 MB/s |
 
-Measured with Qwen3-32B Q4_K_M (19.8 GB), which does not fit on any single GPU here:
-
-| Setup | Prompt (512 tokens) | Generation |
-|---|---|---|
-| RTX 3070 8 GB alone (rest in RAM) | 210 tokens/s | 1.9 tokens/s |
-| RTX 3070 + RTX 2060 + GTX 1050 Ti + MacBook Air M3 on Wi-Fi | 53 tokens/s | 4.7 tokens/s |
-
-Generation got 2.5x faster, while prompt processing got slower: activations cross the network and the slower GPUs compute their share. The first load took ~6.5 minutes, mostly weights going to the MacBook over Wi-Fi.
+The charts come from `docs/charts/make_charts.py` (no dependencies); after changing its numbers, run `python docs/charts/make_charts.py`.
 
 ## Files
 
 - `cluster.py`: the tool (runs on the main host).
 - `setup-main.sh`: first-time setup of a Linux or macOS main host.
 - `worker-setup-windows.ps1`, `worker-setup-unix.sh`: templates for the worker setup scripts; `init` writes filled-in copies to `generated/`.
+- `docs/charts/`: benchmark charts (light and dark SVGs) and the script that draws them.
 - `~/.llama-cluster/` on the main host: downloads, binaries, logs (tunnels and `server.log`) and state.
 - `~/llama-cluster/` on the workers: binaries.
