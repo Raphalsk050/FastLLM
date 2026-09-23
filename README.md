@@ -119,7 +119,7 @@ Generation settings become the server defaults; every API request can still send
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://192.168.1.9:8080/v1", api_key="YOUR_KEY")
+client = OpenAI(base_url="http://MAIN_HOST_IP:8080/v1", api_key="YOUR_KEY")
 r = client.chat.completions.create(
     model="qwen14b",
     messages=[{"role": "user", "content": "hello"}],
