@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -531,6 +532,59 @@ def fetch_asset(build, name):
     return path
 
 
+HF_PART_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def hf_request(url, extra_headers=None):
+    headers = {"User-Agent": "fastllm"}
+    if os.environ.get("HF_TOKEN"):  # gated models (Llama and others)
+        headers["Authorization"] = f"Bearer {os.environ['HF_TOKEN']}"
+    headers.update(extra_headers or {})
+    return urllib.request.Request(url, headers=headers)
+
+
+def hf_file_info(repo, path):
+    """Size and sha256 of a file in a Hugging Face model repo."""
+    folder = path.rsplit("/", 1)[0] if "/" in path else ""
+    url = f"https://huggingface.co/api/models/{repo}/tree/main" + (f"/{folder}" if folder else "")
+    try:
+        with urllib.request.urlopen(hf_request(url), timeout=30) as r:
+            items = json.load(r)
+    except urllib.error.HTTPError as e:
+        gated = " (modelo restrito? defina HF_TOKEN)" if e.code in (401, 403) else ""
+        die(f"o Hugging Face respondeu {e.code} para {repo}{gated}")
+    for item in items:
+        if item.get("path") == path:
+            lfs = item.get("lfs") or {}
+            return lfs.get("size") or item.get("size"), lfs.get("oid")
+    die(f"{path} nao existe em {repo}")
+
+
+def download_file(url, dest, size, sha):
+    """Resumable download with sha256 check."""
+    if dest.exists() and dest.stat().st_size == size and (not sha or sha256_file(dest) == sha):
+        print(f"  ja baixado: {dest}")
+        return
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    with urllib.request.urlopen(hf_request(url, {"Range": f"bytes={have}-"} if have else None), timeout=60) as resp:
+        if have and resp.status != 206:
+            have = 0  # server ignored the range; start over
+        done, last = have, 0.0
+        with open(part, "ab" if have else "wb") as out:
+            for chunk in iter(lambda: resp.read(1 << 20), b""):
+                out.write(chunk)
+                done += len(chunk)
+                if time.time() - last > 10:
+                    print(f"  {dest.name}: {done / 1e9:.1f} de {size / 1e9:.1f} GB")
+                    last = time.time()
+    if sha and sha256_file(part) != sha:
+        part.unlink()
+        die(f"sha256 nao confere em {dest.name}; rode de novo")
+    part.replace(dest)
+    print(f"  ok: {dest}")
+
+
 def extract_local(files, target):
     target.mkdir(parents=True, exist_ok=True)
     for f in files:
@@ -879,6 +933,29 @@ def rpc_list(tunnels):
     return ",".join(f"127.0.0.1:{t['port']}" for t in tunnels)
 
 
+def cmd_pull(args):
+    m = HF_PART_RE.search(args.file)
+    files = ([HF_PART_RE.sub(f"-{i:05d}-of-{m.group(2)}.gguf", args.file) for i in range(1, int(m.group(2)) + 1)]
+             if m else [args.file])
+    target = Path(os.path.expanduser(args.dir))
+    target.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        size, sha = hf_file_info(args.repo, f)
+        print(f"{f} ({size / 1e9:.1f} GB)")
+        download_file(f"https://huggingface.co/{args.repo}/resolve/main/{f}", target / Path(f).name, size, sha)
+    first = (target / Path(files[0]).name).resolve()
+    if first.suffix != ".gguf":
+        return
+    name = args.profile or re.sub(r"-00001-of-\d{5}$", "", first.stem).lower()
+    if MODELS_PATH.exists() and name in load_profiles():
+        print(f"perfil '{name}' ja existe em {MODELS_PATH.name}")
+    else:
+        with open(MODELS_PATH, "a", encoding="utf-8") as fp:
+            fp.write(f"\n[{name}]\nmodel = {first.as_posix()}\ncontext_length = {args.context}\n")
+        print(f"perfil '{name}' criado em {MODELS_PATH.name}")
+    print(f"Proximo: python {SCRIPT} serve {name} --detach --public")
+
+
 def cmd_models(args):
     profiles = load_profiles()
     if not profiles:
@@ -1073,6 +1150,14 @@ def main():
 
     sub.add_parser("start", help="liga os servidores RPC e os tuneis").set_defaults(fn=cmd_start)
     sub.add_parser("models", help=f"lista os perfis de {MODELS_PATH.name}").set_defaults(fn=cmd_models)
+
+    p = sub.add_parser("pull", help="baixa um GGUF do Hugging Face e cria o perfil")
+    p.add_argument("repo", help="ex.: Qwen/Qwen3-32B-GGUF")
+    p.add_argument("file", help="ex.: Qwen3-32B-Q4_K_M.gguf; arquivo em partes (-00001-of-0000N) baixa todas")
+    p.add_argument("--dir", default="~/models", help="pasta de destino (padrao: ~/models)")
+    p.add_argument("--profile", help="nome do perfil (padrao: nome do arquivo)")
+    p.add_argument("--context", type=int, default=8192, help="context_length do perfil novo")
+    p.set_defaults(fn=cmd_pull)
 
     p = sub.add_parser("bench", help="mede a velocidade de um perfil ou arquivo .gguf")
     p.add_argument("target", help=f"perfil de {MODELS_PATH.name} ou arquivo .gguf")
