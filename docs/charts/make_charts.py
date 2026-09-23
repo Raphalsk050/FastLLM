@@ -192,17 +192,17 @@ RESULTS = {
     ("14b", "2060"): dict(pp=674.9, tg=30.72, load=17.3, pp_at=GPU, tg_at=GPU),
     ("14b", "1050"): dict(pp=267.0, tg=12.27, load=14.6, pp_at=RAM, tg_at=RAM),
     ("14b", "3way"): dict(pp=262.7, tg=15.49, load=27.7, pp_at=GPU, tg_at=GPU),
-    ("14b", "four"): dict(note="not measured: the MacBook was offline"),
+    ("14b", "four"): dict(pp=112.8, tg=9.36, load=23.5, pp_at=GPU, tg_at=GPU),
     ("32b", "single"): dict(pp=221.5, tg=2.07, load=8.6, pp_at=RAM, tg_at=RAM),
     ("32b", "2060"): dict(pp=192.1, tg=2.43, load=18.4, pp_at=RAM, tg_at=RAM),
     ("32b", "1050"): dict(pp=145.9, tg=2.18, load=19.0, pp_at=RAM, tg_at=RAM),
     ("32b", "3way"): dict(pp=128.5, tg=2.69, load=31.2, pp_at=RAM, tg_at=RAM),
-    ("32b", "four"): dict(note="not measured: the MacBook was offline"),
+    ("32b", "four"): dict(pp=49.3, tg=4.91, load=47.9, pp_at=GPU, tg_at=GPU),
     ("flash", "single"): dict(pp=87.7, tg=13.33, load=18.7, pp_at=RAM, tg_at=RAM),
     ("flash", "2060"): dict(pp=61.1, tg=9.77, load=28.6, pp_at=RAM, tg_at=RAM),
     ("flash", "1050"): dict(pp=82.1, tg=12.20, load=23.3, pp_at=RAM, tg_at=RAM),
     ("flash", "3way"): dict(pp=74.6, tg=6.32, load=49.7, pp_at=RAM, tg_at=RAM),
-    ("flash", "four"): dict(note="not measured: the MacBook was offline"),
+    ("flash", "four"): dict(pp=57.9, tg=3.57, load=80.5, pp_at=RAM, tg_at=RAM),
 }
 
 MACHINES = ["Main host and single PC: Ryzen 9 5950X, 64 GB RAM, RTX 3070 8 GB. Workers: Ryzen 5 5600X with RTX 2060 6 GB",
@@ -232,9 +232,9 @@ def axis(metric, step):
     return step * math.ceil(top * 1.12 / step)
 
 
-MOE_NOTE = ["Flash-Next is a mixture-of-experts model (10 of its 512 experts per token). In every setup llama.cpp's automatic",
-            "fit left 64-69 GiB of it in the main host's RAM and put only 4-10 GiB on the GPUs, so more machines added network",
-            "hops without taking much work off the main host's CPU."]
+MOE_NOTE = ["Flash-Next is a mixture-of-experts model (10 of its 512 experts per token). Without the MacBook, llama.cpp's automatic",
+            "fit left 64-69 GiB of it in the main host's RAM and put 4-10 GiB on the GPUs; with the MacBook it moved 16 GiB there,",
+            "but every token then crossed Wi-Fi. More machines added network hops faster than they took work off the main host."]
 
 chart(
     "generation-speed", "Generation speed",

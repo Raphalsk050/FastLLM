@@ -177,9 +177,9 @@ Arguments after `--` go straight to llama.cpp, e.g. `python cluster.py serve qwe
 
 ## What to expect
 
-- **A split pays off when it moves weights out of system RAM.** With the model split by layers, each token passes through every machine in turn, so more machines means more memory, not more speed. Qwen3-14B went from 8.1 tokens/s on one PC to 30.7 tokens/s with an RTX 2060 added, because the whole model then fit in GPU memory.
-- **Slow machines drag the rest down.** Adding a GTX 1050 Ti to that pair cut Qwen3-14B from 30.7 to 15.5 tokens/s. While part of the model still runs from RAM, gains stay small: Qwen3-32B ran at 2.1-2.7 tokens/s on every set of machines tested, with 8-13 GiB of it in the main host's RAM.
-- **Mixture-of-experts models may run best on one PC.** In every setup, llama.cpp's automatic fit left 64-69 GiB of Qwen3.8-Flash-Next in the main host's RAM and put only 4-10 GiB on the GPUs, so the workers added network hops without taking much work off the main host's CPU: the single PC (13.3 tokens/s) beat every cluster (6.3-12.2 tokens/s).
+- **A split pays off when it moves weights out of system RAM.** With the model split by layers, each token passes through every machine in turn, so more machines means more memory, not more speed. Qwen3-14B went from 8.1 tokens/s on one PC to 30.7 tokens/s with an RTX 2060 added, because the whole model then fit in GPU memory. Qwen3-32B only sped up (2.1 to 4.9 tokens/s) once the MacBook's 17.8 GB joined and the whole model fit in GPU memory.
+- **Slow machines drag the rest down.** Adding a GTX 1050 Ti to that pair cut Qwen3-14B from 30.7 to 15.5 tokens/s, and adding the MacBook on Wi-Fi as well cut it to 9.4. While part of the model still runs from RAM, gains stay small: without the MacBook, Qwen3-32B ran at 2.1-2.7 tokens/s on every set of machines, with 8-13 GiB of it in the main host's RAM.
+- **Mixture-of-experts models may run best on one PC.** Without the MacBook, llama.cpp's automatic fit left 64-69 GiB of Qwen3.8-Flash-Next in the main host's RAM and put only 4-10 GiB on the GPUs; with the MacBook it moved 16 GiB there, but every token then crossed Wi-Fi. The single PC (13.3 tokens/s) beat every cluster (3.6-12.2 tokens/s).
 - **Prompts suffer first.** Reading a prompt is compute-bound, so slow GPUs and network hops hurt it more than generation; the server's prompt cache makes repeated prefixes almost free.
 - **First load:** the main host sends each worker its share of the weights (~90 MB/s on 1 Gbps, so 100 GB takes ~20 minutes). Later loads use each worker's cache: Qwen3-32B on the RTX 3070 + RTX 2060 took 33 s the first time (1.7 GB sent) and 16-18 s afterwards.
 - **Full GPU:** on Windows, when a GPU fills up the system moves part of the model to RAM and generation drops below 1 token/s (`nvidia-smi dmon` shows ~10 GB/s of PCIe traffic). Raise the margins in `cluster.json` or lower `context_length`.
@@ -195,7 +195,7 @@ python cluster.py start --skip WORKER,...   # pick the workers; the single PC ru
 python cluster.py bench MODEL               # llama-bench -p 512 -n 128 -r 2 -fitt 1536
 ```
 
-Each cell ran at least three times; the charts and the table show the median, and every run is listed below the table. The machine with the RTX 3070 is the main host in every cluster run and also the single-PC baseline. The MacBook was offline during this session, so the rows with all four machines are empty; the four-machine results from before, measured differently, are under [Earlier measurements](#earlier-measurements).
+Each cell ran at least three times; the charts and the table show the median, and every run is listed below the table. The machine with the RTX 3070 is the main host in every cluster run and also the single-PC baseline; the MacBook joins over Wi-Fi.
 
 | Role | CPU | RAM | GPU | GPU memory | Link to the main host |
 |---|---|---|---|---|---|
@@ -242,17 +242,17 @@ Each cell ran at least three times; the charts and the table show the median, an
 |  | RTX 3070 + RTX 2060 | GPUs only | 675 | 30.7 | 17.3 | 3 |
 |  | RTX 3070 + GTX 1050 Ti | 1.2 GiB in RAM | 267 | 12.3 | 14.6 | 3 |
 |  | RTX 3070 + RTX 2060 + GTX 1050 Ti | GPUs only | 263 | 15.5 | 27.7 | 3 |
-|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | not measured: the MacBook was offline | — | — | — | 0 |
+|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | GPUs only | 113 | 9.4 | 23.5 | 3 |
 | Qwen3-32B Q4_K_M (19.8 GB) | Single PC: RTX 3070 + 64 GB RAM | 13.4 GiB in RAM | 222 | 2.1 | 8.6 | 3 |
 |  | RTX 3070 + RTX 2060 | 10.2 GiB in RAM | 192 | 2.4 | 18.4 | 3 |
 |  | RTX 3070 + GTX 1050 Ti | 11.5 GiB in RAM | 146 | 2.2 | 19.0 | 3 |
 |  | RTX 3070 + RTX 2060 + GTX 1050 Ti | 8.3 GiB in RAM | 128 | 2.7 | 31.2 | 3 |
-|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | not measured: the MacBook was offline | — | — | — | 0 |
+|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | GPUs only | 49.3 | 4.9 | 47.9 | 3 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL (78.9 GB, MoE) | Single PC: RTX 3070 + 64 GB RAM | 69.0 GiB in RAM | 87.7 | 13.3 | 18.7 | 3 |
 |  | RTX 3070 + RTX 2060 | 66.0 GiB in RAM | 61.1 | 9.8 | 28.6 | 3 |
 |  | RTX 3070 + GTX 1050 Ti | 67.6 GiB in RAM | 82.1 | 12.2 | 23.3 | 4 |
 |  | RTX 3070 + RTX 2060 + GTX 1050 Ti | 63.8 GiB in RAM | 74.6 | 6.3 | 49.7 | 3 |
-|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | not measured: the MacBook was offline | — | — | — | 0 |
+|  | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 47.7 GiB in RAM | 57.9 | 3.6 | 80.5 | 3 |
 
 <details>
 <summary>Every run</summary>
@@ -271,6 +271,9 @@ Each cell ran at least three times; the charts and the table show the median, an
 | Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 1 | 262.7 ± 31.6 | 15.74 ± 1.40 | 30.6 | 1.78 |
 | Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 2 | 282.0 ± 4.4 | 15.49 ± 0.96 | 18.4 | 0.42 |
 | Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 3 | 244.2 ± 39.9 | 15.11 ± 0.94 | 27.7 | 0.41 |
+| Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 1 | 112.8 ± 2.2 | 9.36 ± 2.03 | 41.2 | 2.14 |
+| Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 2 | 111.2 ± 3.7 | 9.66 ± 1.57 | 20.6 | 0.58 |
+| Qwen3-14B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 3 | 113.5 ± 0.7 | 9.29 ± 1.56 | 23.5 | 0.58 |
 | Qwen3-32B Q4_K_M | RTX 3070 + 64 GB RAM | 1 | 229.6 ± 2.0 | 2.08 ± 0.05 | 8.6 | 0.00 |
 | Qwen3-32B Q4_K_M | RTX 3070 + 64 GB RAM | 2 | 221.5 ± 3.9 | 2.07 ± 0.05 | 8.9 | 0.01 |
 | Qwen3-32B Q4_K_M | RTX 3070 + 64 GB RAM | 3 | 214.8 ± 14.7 | 2.06 ± 0.01 | 6.2 | 0.00 |
@@ -283,6 +286,9 @@ Each cell ran at least three times; the charts and the table show the median, an
 | Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 1 | 129.2 ± 5.0 | 2.69 ± 0.19 | 37.3 | 1.61 |
 | Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 2 | 128.5 ± 0.4 | 2.58 ± 0.00 | 22.0 | 0.41 |
 | Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti | 3 | 119.5 ± 7.2 | 2.82 ± 0.07 | 31.2 | 0.42 |
+| Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 1 | 50.3 ± 1.8 | 4.91 ± 0.05 | 49.4 | 1.33 |
+| Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 2 | 49.3 ± 0.8 | 4.90 ± 0.06 | 47.9 | 0.77 |
+| Qwen3-32B Q4_K_M | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 3 | 49.1 ± 1.7 | 4.95 ± 0.11 | 44.9 | 0.77 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + 64 GB RAM | 1 | 87.7 ± 16.6 | 13.53 ± 1.21 | 18.7 | 0.00 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + 64 GB RAM | 2 | 93.0 ± 19.1 | 13.33 ± 0.85 | 19.6 | 0.01 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + 64 GB RAM | 3 | 62.3 ± 1.2 | 12.70 ± 0.63 | 11.8 | 0.00 |
@@ -296,14 +302,17 @@ Each cell ran at least three times; the charts and the table show the median, an
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti | 1 | 69.4 ± 0.5 | 6.27 ± 0.11 | 49.7 | 3.56 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti | 2 | 97.5 ± 7.0 | 6.32 ± 0.28 | 32.6 | 0.93 |
 | Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti | 3 | 74.6 ± 4.0 | 6.57 ± 0.13 | 50.7 | 0.93 |
+| Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 1 | 53.0 ± 0.7 | 3.37 ± 0.27 | 95.3 | 3.27 |
+| Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 2 | 63.0 ± 0.2 | 3.57 ± 0.03 | 80.5 | 2.73 |
+| Qwen3.8-Flash-Next UD-Q2_K_XL | RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 | 3 | 57.9 ± 12.2 | 3.67 ± 0.07 | 76.8 | 2.74 |
 
 </details>
 
-"Where the weights lived" is what llama.cpp's automatic fit chose for the generation test: the model size minus what went to the GPUs, which then ran on the main host's CPU (median of the runs; free VRAM, and so the split, varied a little between runs). Runs that sent more than ~0.3 GB over the network were loading a split for the first time.
+"Where the weights lived" is what llama.cpp's automatic fit chose for the generation test: the model size minus what went to the GPUs, which then ran on the main host's CPU (median of the runs; free VRAM, and so the split, varied a little between runs). The last column of the per-run table is what the main host sent over the network during that run: the first run of a new split sends its weights, and later runs mostly reuse each worker's cache.
 
 ### Earlier measurements
 
-Measured before the table above, with mixed methods (llama-bench with tg32 or tg128 and one or two repetitions, or the chat server with its own context and margins), so they do not compare directly with it. Kept for reference, including the four-machine runs:
+Measured before the table above, with mixed methods (llama-bench with tg32 or tg128 and one or two repetitions, or the chat server with its own context and margins), so they do not compare directly with it. Kept for reference:
 
 | Model | Machines | Method | Prompt (tok/s) | Generation (tok/s) |
 |---|---|---|---|---|
