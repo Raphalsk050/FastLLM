@@ -179,6 +179,15 @@ Measured with Qwen3-14B Q4_K_M (9 GB) on 1 Gbps Ethernet:
 | RTX 3070 + RTX 2060 6 GB, context 640 | 26.7 tokens/s |
 | RTX 3070 + RTX 2060 6 GB, context 8192 (server) | 20.5 tokens/s |
 
+Measured with Qwen3-32B Q4_K_M (19.8 GB), which does not fit on any single GPU here:
+
+| Setup | Prompt (512 tokens) | Generation |
+|---|---|---|
+| RTX 3070 8 GB alone (rest in RAM) | 210 tokens/s | 1.9 tokens/s |
+| RTX 3070 + RTX 2060 + GTX 1050 Ti + MacBook Air M3 on Wi-Fi | 53 tokens/s | 4.7 tokens/s |
+
+Generation got 2.5x faster, while prompt processing got slower: activations cross the network and the slower GPUs compute their share. The first load took ~6.5 minutes, mostly weights going to the MacBook over Wi-Fi.
+
 ## Files
 
 - `cluster.py`: the tool (runs on the main host).
