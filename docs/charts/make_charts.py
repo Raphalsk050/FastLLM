@@ -1,9 +1,16 @@
 """Render the FastLLM benchmark charts as light and dark SVGs for the README.
 
-Every number below was measured on the home test cluster (llama.cpp b11115).
-Run from anywhere:  python docs/charts/make_charts.py
+Every speed and load number below comes from one session on the home test cluster (llama.cpp b11115),
+measured the same way for every model and every set of machines:
+
+    python cluster.py start --skip ...            # pick the machines (single PC: bench --local)
+    python cluster.py bench MODEL -- -v           # llama-bench -p 512 -n 128 -r 2 -fitt 1536
+
+Each cell ran at least three times and the charts show the median. Load time is read from the llama-bench
+log: seconds until the model was loaded for the first test. Run from anywhere:  python docs/charts/make_charts.py
 """
 
+import math
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
@@ -21,8 +28,8 @@ THEMES = {
 W, PAD, BAR_H, BAR_GAP, ROW_PAD = 820, 24, 16, 2, 12
 
 # Where the weights lived during a run; the same color means the same thing in every chart.
-GPU, RAM, SPILL = 0, 1, 2
-PLACEMENT = ["All in GPU memory", "Partly in system RAM", "GPU overflowed (Windows spilled VRAM to RAM)"]
+GPU, RAM = 0, 1
+PLACEMENT = ["All in GPU memory", "Partly in system RAM"]
 
 
 def esc(s):
@@ -81,7 +88,8 @@ def chart(name, title, subtitle, legend, rows, axis_max, tick_step, fmt, footnot
                 y += 20
                 continue
             _, label, values, note = row
-            block_h = len(values) * BAR_H + (len(values) - 1) * BAR_GAP
+            n = max(len(values), 1)
+            block_h = n * BAR_H + (n - 1) * BAR_GAP
             body.append(text(plot_left - 12, y + block_h / 2 + 4, label, 12, t["ink"], anchor="end"))
             by = y
             for value, key in values:
@@ -91,7 +99,7 @@ def chart(name, title, subtitle, legend, rows, axis_max, tick_step, fmt, footnot
                 body.append(text(max(x1, plot_left + 1.5) + 6, by + BAR_H / 2 + 4, fmt(value), 12, t["ink2"],
                                  tabular=True, halo=t["surface"]))
                 by += BAR_H + BAR_GAP
-            if note:
+            if note:  # a row without a bar (run failed) carries its note where the bar would be
                 body.append(text(plot_left + 6, by + BAR_H / 2 + 4, note, 11.5, t["muted"], halo=t["surface"]))
                 by += BAR_H + BAR_GAP
             y = by - BAR_GAP + ROW_PAD
@@ -163,75 +171,102 @@ chart(
     ["Wi-Fi costs about 13x the latency of a cable. Copying files to the RTX 2060 PC over SSH ran at 90 MB/s."],
 )
 
+# One matrix feeds the three performance charts: the same models on the same machines, measured the same way.
+SETUPS = [  # key, label, section
+    ("single", "RTX 3070 + 64 GB RAM", "Single PC"),
+    ("2060", "RTX 3070 + RTX 2060", "Cluster"),
+    ("1050", "RTX 3070 + GTX 1050 Ti", "Cluster"),
+    ("3way", "RTX 3070 + RTX 2060 + GTX 1050 Ti", "Cluster"),
+    ("four", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3", "Cluster"),
+]
+MODELS = [
+    ("14b", "Qwen3-14B Q4_K_M · 9.0 GB"),
+    ("32b", "Qwen3-32B Q4_K_M · 19.8 GB"),
+    ("flash", "Qwen3.8-Flash-Next UD-Q2_K_XL · 78.9 GB (MoE)"),
+]
+# Median of every run of each cell (3 or more runs; each run is llama-bench with 2 repetitions).
+# pp: prompt tok/s (pp512), tg: generation tok/s (tg128), load: seconds until loaded;
+# pp_at / tg_at: where the weights lived during that test. A missing value is drawn as a note, never dropped.
+RESULTS = {
+    ("14b", "single"): dict(pp=719.2, tg=8.10, load=5.3, pp_at=RAM, tg_at=RAM),
+    ("14b", "2060"): dict(pp=674.9, tg=30.72, load=17.3, pp_at=GPU, tg_at=GPU),
+    ("14b", "1050"): dict(pp=267.0, tg=12.27, load=14.6, pp_at=RAM, tg_at=RAM),
+    ("14b", "3way"): dict(pp=262.7, tg=15.49, load=27.7, pp_at=GPU, tg_at=GPU),
+    ("14b", "four"): dict(note="not measured: the MacBook was offline"),
+    ("32b", "single"): dict(pp=221.5, tg=2.07, load=8.6, pp_at=RAM, tg_at=RAM),
+    ("32b", "2060"): dict(pp=192.1, tg=2.43, load=18.4, pp_at=RAM, tg_at=RAM),
+    ("32b", "1050"): dict(pp=145.9, tg=2.18, load=19.0, pp_at=RAM, tg_at=RAM),
+    ("32b", "3way"): dict(pp=128.5, tg=2.69, load=31.2, pp_at=RAM, tg_at=RAM),
+    ("32b", "four"): dict(note="not measured: the MacBook was offline"),
+    ("flash", "single"): dict(pp=87.7, tg=13.33, load=18.7, pp_at=RAM, tg_at=RAM),
+    ("flash", "2060"): dict(pp=61.1, tg=9.77, load=28.6, pp_at=RAM, tg_at=RAM),
+    ("flash", "1050"): dict(pp=82.1, tg=12.20, load=23.3, pp_at=RAM, tg_at=RAM),
+    ("flash", "3way"): dict(pp=74.6, tg=6.32, load=49.7, pp_at=RAM, tg_at=RAM),
+    ("flash", "four"): dict(note="not measured: the MacBook was offline"),
+}
+
+MACHINES = ["Main host and single PC: Ryzen 9 5950X, 64 GB RAM, RTX 3070 8 GB. Workers: Ryzen 5 5600X with RTX 2060 6 GB",
+            "(12 GB RAM), Pentium G4560 with GTX 1050 Ti 4 GB (8 GB RAM), MacBook Air M3 24 GB on Wi-Fi."]
+
+
+def matrix(metric, where=None):
+    rows = []
+    for model, title in MODELS:
+        rows.append(("group", title))
+        section = None
+        for key, label, sec in SETUPS:
+            if sec != section:
+                rows.append(("sub", sec))
+                section = sec
+            r = RESULTS.get((model, key), {})
+            if r.get(metric) is None:
+                rows.append(("bars", label, [], r.get("note", "not measured")))
+            else:
+                rows.append(("bars", label, [(r[metric], r[where] if where else 0)], None))
+    return rows
+
+
+def axis(metric, step):
+    """Round the axis up past the longest bar so its value label still fits."""
+    top = max(r[metric] for r in RESULTS.values() if r.get(metric) is not None)
+    return step * math.ceil(top * 1.12 / step)
+
+
+MOE_NOTE = ["Flash-Next is a mixture-of-experts model (10 of its 512 experts per token). In every setup llama.cpp's automatic",
+            "fit left 64-69 GiB of it in the main host's RAM and put only 4-10 GiB on the GPUs, so more machines added network",
+            "hops without taking much work off the main host's CPU."]
+
 chart(
     "generation-speed", "Generation speed",
-    ["Tokens per second while writing the answer. Color shows where the model weights lived."],
-    [(GPU, PLACEMENT[GPU]), (RAM, PLACEMENT[RAM]), (SPILL, PLACEMENT[SPILL])],
-    [("group", "Qwen3-14B Q4_K_M · 9.0 GB"),
-     ("sub", "Single PC"),
-     ("bars", "RTX 3070 + 64 GB RAM", [(7.9, RAM)], None),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060", [(26.7, GPU)], None),
-     ("bars", "RTX 3070 + RTX 2060 · 8k context †", [(20.5, GPU)], None),
-     ("bars", "RTX 3070 + RTX 2060 · 8k context, 1 GB margin †", [(0.5, SPILL)], None),
-     ("bars", "RTX 3070 + GTX 1050 Ti", [(10.5, RAM)], None),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3", [(7.1, GPU)], None),
-     ("group", "Qwen3-32B Q4_K_M · 19.8 GB"),
-     ("sub", "Single PC"),
-     ("bars", "RTX 3070 + 64 GB RAM", [(1.9, RAM)], None),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti †", [(2.2, RAM)], None),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3", [(4.7, GPU)], None),
-     ("group", "Qwen3.8-Flash-Next UD-Q2_K_XL · 78.9 GB"),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 †", [(3.5, RAM)], None)],
-    30, 5, tok,
-    ["llama.cpp b11115; llama-bench tg128/tg32, † measured on the running server (16k context unless the label says 8k).",
-     "The RTX 3070 PC (Ryzen 9 5950X, 64 GB) is the main host. Workers: RTX 2060 (Ryzen 5 5600X, 12 GB), GTX 1050 Ti",
-     "(Pentium G4560, 8 GB) and MacBook Air M3 (24 GB, on Wi-Fi). Flash-Next is a 125B MoE that uses 6B parameters",
-     "per token; about 42 GB of it sat in the main PC's RAM."],
+    ["Tokens per second while writing the answer (llama-bench tg128), median of 3 or more runs per bar.",
+     "Every model ran on the same five sets of machines; color shows where the model weights lived."],
+    [(GPU, PLACEMENT[GPU]), (RAM, PLACEMENT[RAM])],
+    matrix("tg", "tg_at"),
+    axis("tg", 5), 5, tok,
+    MACHINES + MOE_NOTE,
     label_w=330, tick_fmt=lambda v: f"{v:g}",
 )
 
 chart(
     "prompt-speed", "Prompt processing speed",
-    ["Tokens per second while reading the prompt: llama-bench pp512 unless the label says otherwise."],
+    ["Tokens per second while reading a 512-token prompt (llama-bench pp512), from the same runs.",
+     "Reading a prompt is compute-bound, so slow GPUs and network hops hurt it more than generation."],
     [(GPU, PLACEMENT[GPU]), (RAM, PLACEMENT[RAM])],
-    [("group", "Qwen3-14B Q4_K_M · 9.0 GB"),
-     ("sub", "Single PC"),
-     ("bars", "RTX 3070 + 64 GB RAM", [(639.5, RAM)], None),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060", [(672.1, GPU)], None),
-     ("bars", "RTX 3070 + GTX 1050 Ti", [(219.4, RAM)], None),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3", [(100.1, GPU)], None),
-     ("group", "Qwen3-32B Q4_K_M · 19.8 GB"),
-     ("sub", "Single PC"),
-     ("bars", "RTX 3070 + 64 GB RAM", [(210.3, RAM)], None),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti †", [(112, RAM)], None),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3", [(53.2, GPU)], None),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 †", [(48, GPU)], None),
-     ("group", "Qwen3.8-Flash-Next UD-Q2_K_XL · 78.9 GB"),
-     ("sub", "Cluster"),
-     ("bars", "RTX 3070 + RTX 2060 + GTX 1050 Ti + M3 ‡", [(10.9, RAM)], None)],
-    700, 100, tok,
-    ["† server, 2,500-token prompt. ‡ server, short prompt after warm-up; the first, cold prompt ran at 0.5 tok/s.",
-     "Reading a prompt is compute-bound, so the slower GPUs and the M3's Wi-Fi hop hurt it more than generation.",
-     "The server caches the prompt prefix: a repeated system prompt came back in 0.6-0.9 s."],
+    matrix("pp", "pp_at"),
+    axis("pp", 100), 100, tok,
+    MACHINES,
     label_w=330, tick_fmt=lambda v: f"{v:g}",
 )
 
 chart(
-    "load-time", "Time until the server is ready",
-    ["Seconds. The first load sends the weights over the network; later loads reuse each worker's disk cache."],
-    [(0, "First load"), (1, "With the worker cache")],
-    [("bars", "Qwen3-14B · RTX 3070 + RTX 2060", [(80, 0), (14, 1)], None),
-     ("bars", "Qwen3-32B · all four machines", [(380, 0), (50, 1)], None),
-     ("bars", "Qwen3.8-Flash-Next · all four machines", [(440, 0)], None)],
-    500, 100, lambda v: f"{v:g} s",
-    ["All four machines: RTX 3070, RTX 2060, GTX 1050 Ti and MacBook Air M3 (Wi-Fi). First loads of 14B and 32B are",
-     "llama-bench runs minus the benchmark itself. The 32B cached reload sent only 0.3 GB over the network.",
-     "Flash-Next's cached reload was not measured."],
+    "load-time", "Load time",
+    ["Seconds until the model was loaded for the first test (llama-bench log), from the same runs. Loads reuse",
+     "each worker's cache; the first load of a new split also sends the weights over the network (see the README)."],
+    [],
+    matrix("load"),
+    axis("load", 10), 10, lambda v: f"{v:.1f} s",
+    MACHINES,
+    label_w=330,
 )
 
 print("charts written to", OUT)
