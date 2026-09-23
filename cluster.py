@@ -13,6 +13,7 @@ import argparse
 import base64
 import configparser
 import hashlib
+import http.server
 import json
 import os
 import platform
@@ -26,6 +27,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -642,28 +644,117 @@ def cmd_init(args):
     print(f"Cada um imprime a linha 'python {SCRIPT} add ...' para rodar aqui.")
 
 
-def cmd_add(args):
+def register_worker(host, user, name=None, backend=None, replace_host=False):
+    """Detect a worker over SSH and store it. replace_host re-registers a known host instead of failing."""
     cfg = load_config()
-    name = args.name or args.host
-    if any(w["name"] == name for w in cfg["workers"]):
+    name = name or host
+    if replace_host:
+        cfg["workers"] = [w for w in cfg["workers"] if w["host"] != host]
+        base, n = name, 2
+        while any(w["name"] == name for w in cfg["workers"]):
+            name, n = f"{base}-{n}", n + 1
+    elif any(w["name"] == name for w in cfg["workers"]):
         die(f"ja existe um trabalhador chamado {name}")
-    w = {"name": name, "host": args.host, "user": args.user}
+    w = {"name": name, "host": host, "user": user}
     w.update(detect(cfg, w))
-    if args.backend:
-        w["backend"] = args.backend
-    cfg["workers"].append(w)
-    save_config(cfg)
-    print(f"adicionado: {name}  {w['os']}/{w['arch']}  backend={w['backend']}  gpu={w['gpus'] or '-'}")
-    if w["backend"] == "cpu":
-        print("aviso: sem GPU compativel; um trabalhador so com CPU costuma deixar o conjunto mais lento. "
-              f"Para tirar: python {SCRIPT} remove {name}")
-    if w["os"] == "linux" and w["backend"] == "cuda" and not args.backend:
+    note = ""
+    if backend:
+        w["backend"] = backend
+    elif w["os"] == "linux" and w["backend"] == "cuda":
         g = glibc_tuple(w.get("glibc"))
         if g and g < CUDA_LINUX_MIN_GLIBC:
             w["backend"] = "vulkan"
-            save_config(cfg)
-            print(f"nota: glibc {w['glibc']} e antiga para o pacote CUDA pronto (pede 2.39+, Ubuntu 24.04); "
-                  "a GPU NVIDIA vai rodar via Vulkan.")
+            note = (f"nota: glibc {w['glibc']} e antiga para o pacote CUDA pronto (pede 2.39+, Ubuntu 24.04); "
+                    "a GPU NVIDIA vai rodar via Vulkan.")
+    cfg["workers"].append(w)
+    save_config(cfg)
+    print(f"adicionado: {name}  {w['os']}/{w['arch']}  backend={w['backend']}  gpu={w['gpus'] or '-'}")
+    if note:
+        print(note)
+    if w["backend"] == "cpu":
+        print("aviso: sem GPU compativel; um trabalhador so com CPU costuma deixar o conjunto mais lento. "
+              f"Para tirar: python {SCRIPT} remove {name}")
+    return w
+
+
+def cmd_add(args):
+    register_worker(args.host, args.user, args.name, args.backend)
+
+
+HOST_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
+USER_RE = re.compile(r"^[A-Za-z0-9._@\\-]{1,64}$")
+NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def cmd_enroll(args):
+    """Serve the Unix worker script and let each worker register itself with a one-time token."""
+    cfg = load_config()
+    script = GENERATED / "worker-setup-unix.sh"
+    if not script.exists():
+        die(f"{script} nao existe. Rode: python {SCRIPT} init")
+    body = script.read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+    token = secrets.token_urlsafe(12)
+    base = f"http://{cfg.get('main_ip') or main_ip()}:{args.port}"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *a):
+            pass
+
+        def reply(self, code, data, ctype="text/plain; charset=utf-8"):
+            if isinstance(data, str):
+                data = (data + "\n").encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path == "/worker-setup-unix.sh":
+                self.reply(200, body)
+            else:
+                self.reply(404, "nao encontrado")
+
+        def do_POST(self):
+            if self.path != "/enroll":
+                return self.reply(404, "nao encontrado")
+            size = min(int(self.headers.get("Content-Length") or 0), 4096)
+            form = urllib.parse.parse_qs(self.rfile.read(size).decode("utf-8", "replace"))
+            field = lambda k: (form.get(k) or [""])[0].strip()
+            if not secrets.compare_digest(field("token"), token):
+                return self.reply(403, "token invalido")
+            host = field("host") or self.client_address[0]
+            user, name = field("user"), field("name") or field("host") or self.client_address[0]
+            if not (HOST_RE.match(host) and USER_RE.match(user) and NAME_RE.match(name)):
+                return self.reply(400, "dados invalidos")
+            print(f"\n{name} ({user}@{host}) pediu registro")
+            try:
+                w = register_worker(host, user, name, replace_host=True)
+            except SystemExit:
+                return self.reply(500, "falhou; veja o terminal do PC principal")
+            self.reply(200, f"registrado como {w['name']} ({w['backend']}, {w['gpus'] or 'sem GPU'})")
+
+    server = http.server.HTTPServer((args.bind, args.port), Handler)
+    fetch = f"curl -fsSL {base}/worker-setup-unix.sh -o /tmp/fastllm-worker.sh"
+    check = f"echo '{digest}  /tmp/fastllm-worker.sh'"
+    run = f"sudo sh /tmp/fastllm-worker.sh {base} {token}"
+    print("Em cada trabalhador, cole no terminal (vai pedir a senha do sudo):\n")
+    print(f"Linux:\n{fetch} && {check} | sha256sum -c - && {run}\n")
+    print(f"macOS:\n{fetch} && {check} | shasum -a 256 -c - && {run}\n")
+    if os.name == "nt":
+        print(f"(se o firewall bloquear, libere a porta {args.port} para a rede local enquanto registra)")
+    else:
+        print(f"(com ufw ativo neste PC: sudo ufw allow {args.port}/tcp enquanto registra; "
+              f"depois sudo ufw delete allow {args.port}/tcp)")
+    print(f"Os registros aparecem aqui. Ctrl+C quando terminar; depois: python {SCRIPT} install && python {SCRIPT} start")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    print(f"\n{len(load_config()['workers'])} trabalhador(es) registrados.")
 
 
 def cmd_remove(args):
@@ -1137,6 +1228,11 @@ def main():
     p.add_argument("--name")
     p.add_argument("--backend", choices=["cuda", "vulkan", "cpu", "metal"], help="forca o tipo de GPU")
     p.set_defaults(fn=cmd_add)
+
+    p = sub.add_parser("enroll", help="mostra um comando para cada trabalhador Linux/macOS se preparar e se registrar")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--bind", default="0.0.0.0", help="endereco onde escutar (padrao: todas as interfaces)")
+    p.set_defaults(fn=cmd_enroll)
 
     p = sub.add_parser("remove", help="tira um trabalhador da lista")
     p.add_argument("name")

@@ -1,9 +1,12 @@
 #!/bin/sh
 # Prepares a Linux or macOS machine to act as a llama-cluster worker.
-# Run as root:  sudo sh worker-setup-unix.sh
+# Run as root:  sudo sh worker-setup-unix.sh [ENROLL_URL TOKEN]
+# With ENROLL_URL and TOKEN (printed by `cluster.py enroll`), the worker registers itself at the end.
 set -eu
 MAIN_HOST_IP='__MAIN_HOST_IP__'
 PUBLIC_KEY='__PUBLIC_KEY__'
+ENROLL_URL=${1:-}
+ENROLL_TOKEN=${2:-}
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Rode com sudo: sudo sh $0"
@@ -73,6 +76,17 @@ chown -R "$TARGET_USER:$(id -gn "$TARGET_USER")" "$TARGET_HOME/.ssh"
 chmod 700 "$TARGET_HOME/.ssh"
 chmod 600 "$TARGET_HOME/.ssh/authorized_keys"
 
+NAME=$(hostname -s 2>/dev/null || hostname)
 echo
-echo "Pronto. No PC principal, rode:"
-echo "  python cluster.py add $IP $TARGET_USER --name $(hostname -s 2>/dev/null || hostname)"
+if [ -n "$ENROLL_URL" ]; then
+    DATA="token=$ENROLL_TOKEN&host=$IP&user=$TARGET_USER&name=$NAME"
+    if command -v curl >/dev/null 2>&1; then
+        R=$(curl -fsS --max-time 120 --data "$DATA" "$ENROLL_URL/enroll" 2>&1) || R="falhou: $R"
+    else
+        R=$(wget -qO- --timeout=120 --post-data="$DATA" "$ENROLL_URL/enroll" 2>&1) || R="falhou: $R"
+    fi
+    echo "Registro no PC principal: $R"
+else
+    echo "Pronto. No PC principal, rode:"
+    echo "  python cluster.py add $IP $TARGET_USER --name $NAME"
+fi
